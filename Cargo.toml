@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/scrawny-cli",
+    "crates/scrawny-core",
+    "crates/scrawny-git",
+    "crates/scrawny-config",
+    "crates/scrawny-output",
+    "crates/scrawny-analysis",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/elci-group/scrawny"
+
+[workspace.dependencies]
+scrawny-core = { path = "crates/scrawny-core" }
+scrawny-git = { path = "crates/scrawny-git" }
+scrawny-config = { path = "crates/scrawny-config" }
+scrawny-output = { path = "crates/scrawny-output" }
+scrawny-analysis = { path = "crates/scrawny-analysis" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "1"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
