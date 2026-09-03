@@ -7,3 +7,6 @@
 
 # local Claude Code session state, not project source
 /.claude/
+
+# kaptaind daemon runtime state (decisions, traces, pid) — not source
+/.kaptaind/
