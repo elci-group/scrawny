@@ -28,7 +28,7 @@ pub fn parse_unified_diff(text: &str) -> Result<Diff, ScrawnyError> {
             if next.starts_with("@@ ") || next.starts_with("diff --git ") {
                 break;
             }
-            let next = lines.next().unwrap();
+            let next = lines.next().expect("peek() above confirmed the iterator is non-empty");
 
             if let Some(rest) = next.strip_prefix("rename from ") {
                 old_path_renamed = Some(PathBuf::from(rest));
@@ -63,7 +63,7 @@ pub fn parse_unified_diff(text: &str) -> Result<Diff, ScrawnyError> {
             if !next.starts_with("@@ ") {
                 break;
             }
-            let header = lines.next().unwrap();
+            let header = lines.next().expect("peek() above confirmed the iterator is non-empty");
             let (old_range, new_range) = parse_hunk_header(header)?;
             let mut body = Vec::new();
 
@@ -71,7 +71,7 @@ pub fn parse_unified_diff(text: &str) -> Result<Diff, ScrawnyError> {
                 if next.starts_with("@@ ") || next.starts_with("diff --git ") {
                     break;
                 }
-                let l = lines.next().unwrap();
+                let l = lines.next().expect("peek() above confirmed the iterator is non-empty");
                 if let Some(content) = l.strip_prefix('+') {
                     body.push(DiffLine::Added(content.to_string()));
                 } else if let Some(content) = l.strip_prefix('-') {
