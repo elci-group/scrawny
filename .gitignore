@@ -4,3 +4,6 @@
 /.uni/
 /.lwoodz/
 /.traci/
+
+# local Claude Code session state, not project source
+/.claude/
