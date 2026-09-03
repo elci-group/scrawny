@@ -58,9 +58,11 @@ fn analyse_json_output_is_valid_and_matches_schema() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["version"], "1");
+    assert_eq!(json["version"], "2");
     assert!(json["metrics"]["review_load"]["total"].is_number());
-    assert!(json["clusters"].as_array().unwrap().is_empty());
+    // One function touched by one hunk resolves to exactly one real cluster
+    // now that symbol data is available (Phase II), not an empty placeholder.
+    assert_eq!(json["clusters"].as_array().unwrap().len(), 1);
     assert!(json["recommendations"].as_array().unwrap().is_empty());
 }
 
@@ -102,7 +104,7 @@ fn check_passes_on_a_small_coherent_change() {
 }
 
 #[test]
-fn suggest_is_honest_about_not_having_decomposition_yet() {
+fn suggest_reports_no_decomposition_for_a_single_coherent_unit() {
     let dir = init_repo();
     std::fs::write(dir.path().join("lib.rs"), "fn main() {}\n").unwrap();
     git(dir.path(), &["add", "."]);
@@ -114,7 +116,32 @@ fn suggest_is_honest_about_not_having_decomposition_yet() {
         .args(["--path", dir.path().to_str().unwrap(), "suggest"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Phase II"));
+        .stdout(predicate::str::contains("no decomposition to propose"));
+}
+
+#[test]
+fn suggest_proposes_a_real_decomposition_for_unrelated_functions() {
+    let dir = init_repo();
+    std::fs::write(
+        dir.path().join("lib.rs"),
+        "fn alpha() {\n    println!(\"a\");\n}\n\nfn beta() {\n    println!(\"b\");\n}\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-q", "-m", "initial"]);
+    std::fs::write(
+        dir.path().join("lib.rs"),
+        "fn alpha() {\n    println!(\"a changed\");\n}\n\nfn beta() {\n    println!(\"b changed\");\n}\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("scrawny")
+        .unwrap()
+        .args(["--path", dir.path().to_str().unwrap(), "suggest"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recommended decomposition:"))
+        .stdout(predicate::str::contains("Expected review-load reduction"));
 }
 
 #[test]

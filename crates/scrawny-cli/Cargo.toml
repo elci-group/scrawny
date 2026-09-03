@@ -15,6 +15,7 @@ scrawny-git.workspace = true
 scrawny-config.workspace = true
 scrawny-analysis.workspace = true
 scrawny-output.workspace = true
+scrawny-parser.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 serde.workspace = true

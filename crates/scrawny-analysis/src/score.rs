@@ -1,11 +1,14 @@
+use scrawny_cluster::Cluster;
 use scrawny_core::{Change, Concern};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Version tag for the scoring formula (§11: "should remain configurable and
 /// versioned"). Bump when the weights or shape below change so historical
-/// reports stay interpretable.
-pub const SCORE_FORMULA_VERSION: &str = "1";
+/// reports stay interpretable. v2: cohesion is cluster-based (real AST
+/// symbol/dependency evidence) whenever symbol data was resolved for the
+/// diff, falling back to v1's concern-fraction proxy only when it wasn't.
+pub const SCORE_FORMULA_VERSION: &str = "2";
 
 /// Review-load breakdown. Deliberately multi-dimensional (§11) — never
 /// collapse to `lines_changed` alone. Phase I approximates
@@ -91,9 +94,10 @@ pub fn compute_review_load(changes: &[Change]) -> ReviewLoad {
 
 /// Fraction of changed lines belonging to the single largest concern.
 /// A one-concern change scores 1.0; an evenly five-way-split change scores
-/// 0.2. This is the Phase I stand-in for full cluster cohesion (§12), which
-/// needs the dependency graph from Phase II to measure properly.
-pub fn compute_cohesion(changes: &[Change]) -> f64 {
+/// 0.2. This is the fallback used when no symbol data was resolved for the
+/// diff at all (non-Rust changes, or content simply unavailable) — a coarse
+/// but honest proxy, not a claim of structural insight we don't have.
+pub fn compute_concern_cohesion(changes: &[Change]) -> f64 {
     if changes.is_empty() {
         return 1.0;
     }
@@ -111,6 +115,22 @@ pub fn compute_cohesion(changes: &[Change]) -> f64 {
     }
 
     let largest = by_concern.values().copied().max().unwrap_or(0);
+    largest as f64 / total_lines as f64
+}
+
+/// Fraction of changed lines belonging to the single largest real cluster
+/// (§12): grouped by actual AST symbol identity and same-file dependency
+/// evidence (scrawny-cluster), not by concern-category resemblance. Used
+/// whenever at least one file in the diff was successfully symbol-resolved
+/// — see `analyse_with_symbols`, which decides between this and
+/// `compute_concern_cohesion`.
+pub fn compute_cluster_cohesion(changes: &[Change], clusters: &[Cluster]) -> f64 {
+    let total_lines: usize = changes.iter().map(Change::lines_changed).sum();
+    if total_lines == 0 {
+        return 1.0;
+    }
+
+    let largest = clusters.iter().map(|c| c.lines).max().unwrap_or(0);
     largest as f64 / total_lines as f64
 }
 

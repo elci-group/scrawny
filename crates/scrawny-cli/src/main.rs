@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
-use scrawny_analysis::AnalysisResult;
+use scrawny_analysis::{AnalysisResult, SymbolTable};
 use scrawny_config::Config;
-use scrawny_core::Diff;
+use scrawny_core::{Diff, FileStatus};
 use scrawny_git::{diff_from_text, DiffSpec, GitCliRepository, Repository};
 use scrawny_output::{build_report, render, Format};
 use std::io::Read;
@@ -91,21 +91,24 @@ fn run(command: Command, path: &Path, format: Format) -> anyhow::Result<ExitCode
         Command::Analyse { staged } => {
             let (root, description, diff) = load_repo_diff(path, staged)?;
             let config = Config::load(&root).map_err(anyhow::Error::from)?;
-            let result = scrawny_analysis::analyse(&diff, &config);
+            let symbols = build_symbol_table(&root, &diff);
+            let result = scrawny_analysis::analyse_with_symbols(&diff, &config, &symbols);
             print_report(&root, &description, &result, format)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Explain { staged } => {
             let (root, description, diff) = load_repo_diff(path, staged)?;
             let config = Config::load(&root).map_err(anyhow::Error::from)?;
-            let result = scrawny_analysis::analyse(&diff, &config);
+            let symbols = build_symbol_table(&root, &diff);
+            let result = scrawny_analysis::analyse_with_symbols(&diff, &config, &symbols);
             print_explain(&root, &description, &result, format)?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Suggest { staged } => {
             let (root, description, diff) = load_repo_diff(path, staged)?;
             let config = Config::load(&root).map_err(anyhow::Error::from)?;
-            let result = scrawny_analysis::analyse(&diff, &config);
+            let symbols = build_symbol_table(&root, &diff);
+            let result = scrawny_analysis::analyse_with_symbols(&diff, &config, &symbols);
             print_suggest(&root, &description, &result, format)?;
             Ok(ExitCode::SUCCESS)
         }
@@ -117,18 +120,53 @@ fn run(command: Command, path: &Path, format: Format) -> anyhow::Result<ExitCode
                 (root, diff)
             };
             let config = Config::load(&root).map_err(anyhow::Error::from)?;
-            let result = scrawny_analysis::analyse(&diff, &config);
+            let symbols = build_symbol_table(&root, &diff);
+            let result = scrawny_analysis::analyse_with_symbols(&diff, &config, &symbols);
             let passed = print_check(&result, &config, format)?;
             Ok(if passed { ExitCode::SUCCESS } else { ExitCode::FAILURE })
         }
         Command::Diff { stdin, file } => {
             let diff = load_standalone_diff(stdin, file.as_deref())?;
             let config = Config::load(path).map_err(anyhow::Error::from)?;
-            let result = scrawny_analysis::analyse(&diff, &config);
+            let symbols = build_symbol_table(path, &diff);
+            let result = scrawny_analysis::analyse_with_symbols(&diff, &config, &symbols);
             print_report(path, "supplied diff", &result, format)?;
             Ok(ExitCode::SUCCESS)
         }
     }
+}
+
+/// Resolve symbol data for every Rust file in `diff` from `root`'s current
+/// working tree. Best-effort by design: a file that can't be read (common
+/// for a stdin-supplied diff whose repo isn't checked out to the matching
+/// ref) is silently skipped — that's the expected degrade-to-Phase-I path,
+/// not an error. A file that *can* be read but fails to parse is surfaced
+/// as a warning, since that's genuinely unexpected.
+fn build_symbol_table(root: &Path, diff: &Diff) -> SymbolTable {
+    let mut table = SymbolTable::new();
+    for file in &diff.files {
+        if file.is_binary || file.status == FileStatus::Removed {
+            continue;
+        }
+        if file.path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(root.join(&file.path)) else {
+            continue;
+        };
+        match scrawny_parser::parse_rust_symbols(&file.path, &content) {
+            Ok(symbols) => {
+                table.insert(file.path.clone(), symbols);
+            }
+            Err(error) => {
+                eprintln!(
+                    "warning: {error}; continuing without symbol data for {}",
+                    file.path.display()
+                );
+            }
+        }
+    }
+    table
 }
 
 fn load_repo_diff(path: &Path, staged: bool) -> anyhow::Result<(PathBuf, String, Diff)> {
@@ -237,9 +275,15 @@ fn print_suggest(
     result: &AnalysisResult,
     format: Format,
 ) -> anyhow::Result<()> {
-    let note = "Decomposition proposals require semantic clustering (dependency graph, \
-        cohesion-validated partitions), which is Phase II work not yet implemented. \
-        Run `scrawny explain` for the concern breakdown available today.";
+    // A decomposition proposal is only meaningful when clustering actually
+    // found more than one independent unit of work. One cluster covering
+    // everything means the change is already a single coherent thing — per
+    // §32, the goal is easier review, not maximal fragmentation for its own
+    // sake, so we don't manufacture a split that isn't there.
+    let decomposable = result.clusters.len() > 1;
+    let total_lines = (result.lines_added + result.lines_removed).max(1);
+    let mut ranked: Vec<_> = result.clusters.iter().collect();
+    ranked.sort_by_key(|c| std::cmp::Reverse(c.lines));
 
     match format {
         Format::Json | Format::Jsonl => {
@@ -249,9 +293,8 @@ fn print_suggest(
                 #[serde(flatten)]
                 report: &'a scrawny_output::Report,
                 decomposition_available: bool,
-                note: &'a str,
             }
-            let out = SuggestReport { report: &report, decomposition_available: false, note };
+            let out = SuggestReport { report: &report, decomposition_available: decomposable };
             let text = if format == Format::Json {
                 serde_json::to_string_pretty(&out)?
             } else {
@@ -262,7 +305,46 @@ fn print_suggest(
         Format::Text => {
             let report = build_report(&root.display().to_string(), description, result);
             println!("{}", render(&report, Format::Text)?);
-            println!("{note}");
+
+            if !decomposable {
+                if result.clusters.len() == 1 {
+                    println!(
+                        "Everything in this change is one connected unit ({} LOC across {} file(s)) — no decomposition to propose.",
+                        result.clusters[0].lines,
+                        result.clusters[0].files.len()
+                    );
+                } else {
+                    println!("Nothing to decompose.");
+                }
+                return Ok(());
+            }
+
+            println!("Recommended decomposition:");
+            println!();
+            let labels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            for (i, cluster) in ranked.iter().enumerate() {
+                let label = labels.chars().nth(i).unwrap_or('?');
+                let files = cluster
+                    .files
+                    .iter()
+                    .map(|f| f.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let what = if cluster.symbols.is_empty() {
+                    files
+                } else {
+                    format!("{files}: {}", cluster.symbols.join(", "))
+                };
+                println!("  {label}  {what} — {} LOC", cluster.lines);
+                for reason in &cluster.evidence {
+                    println!("       {reason}");
+                }
+            }
+            println!();
+
+            let largest_cluster_lines = ranked.first().map(|c| c.lines).unwrap_or(0);
+            let reduction = 100.0 - (largest_cluster_lines as f64 / total_lines as f64 * 100.0);
+            println!("Expected review-load reduction: ~{reduction:.0}% (largest single reviewable unit vs. the whole change)");
         }
     }
     Ok(())

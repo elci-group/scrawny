@@ -90,6 +90,14 @@ pub struct Change {
     pub lines_added: usize,
     pub lines_removed: usize,
     pub classification: Classification,
+    /// Symbol name(s) this change's *actual added/removed lines* were
+    /// attributed to (extraction-time, per-line — see scrawny-analysis's
+    /// `extract::split_by_symbol`), not a crude overlap against `new_range`.
+    /// A hunk's `new_range` includes surrounding diff context and routinely
+    /// spans a container's whole body; testing against it directly would
+    /// treat "shares a context line with the impl block" as relatedness.
+    /// Empty when no symbol data was available for this file.
+    pub touched_symbols: Vec<String>,
 }
 
 impl Change {

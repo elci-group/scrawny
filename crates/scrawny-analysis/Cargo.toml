@@ -8,4 +8,6 @@ repository.workspace = true
 [dependencies]
 scrawny-core.workspace = true
 scrawny-config.workspace = true
+scrawny-cluster.workspace = true
+scrawny-parser.workspace = true
 serde.workspace = true

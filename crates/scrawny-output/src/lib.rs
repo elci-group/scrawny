@@ -1,8 +1,9 @@
 use scrawny_analysis::{AnalysisResult, ConcernSummary};
+use scrawny_cluster::Cluster;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 
-pub const REPORT_SCHEMA_VERSION: &str = "1";
+pub const REPORT_SCHEMA_VERSION: &str = "2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -51,11 +52,12 @@ pub struct ConfidenceInfo {
     pub low_confidence_changes: usize,
 }
 
-/// The stable, versioned machine-readable report shape (§17). `clusters` and
-/// `recommendations` are reserved keys — always present, always empty in
-/// Phase I — so downstream consumers (CI, IDE integrations, other ELCI
-/// tools) can start depending on the schema now and see it fill in as
-/// Phase II/III land, rather than the shape changing out from under them.
+/// The stable, versioned machine-readable report shape (§17). `clusters` is
+/// real as of Phase II — populated whenever at least one file in the diff
+/// was symbol-resolved (see `scrawny_analysis::analyse_with_symbols`), one
+/// singleton cluster per change otherwise. `recommendations` remains a
+/// reserved, always-empty key until Phase III's decomposition proposals
+/// land, so downstream consumers can depend on the schema now.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Report {
     pub version: String,
@@ -63,7 +65,7 @@ pub struct Report {
     pub change: ChangeInfo,
     pub metrics: MetricsInfo,
     pub concerns: Vec<ConcernSummary>,
-    pub clusters: Vec<serde_json::Value>,
+    pub clusters: Vec<Cluster>,
     pub recommendations: Vec<serde_json::Value>,
     pub confidence: ConfidenceInfo,
 }
@@ -96,7 +98,7 @@ pub fn build_report(root: &str, change_description: &str, result: &AnalysisResul
             files_changed: result.files_changed,
         },
         concerns: result.concerns.clone(),
-        clusters: Vec::new(),
+        clusters: result.clusters.clone(),
         recommendations: Vec::new(),
         confidence: ConfidenceInfo {
             average,
@@ -134,6 +136,7 @@ pub fn render_text(report: &Report) -> String {
     );
     let _ = writeln!(out, "Files             {}", report.metrics.files_changed);
     let _ = writeln!(out, "Concerns          {}", report.concerns.len());
+    let _ = writeln!(out, "Clusters          {}", report.clusters.len());
     let _ = writeln!(out);
 
     if !report.concerns.is_empty() {

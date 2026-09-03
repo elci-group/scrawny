@@ -384,8 +384,10 @@ dependencies = [
 name = "scrawny-analysis"
 version = "0.1.0"
 dependencies = [
+ "scrawny-cluster",
  "scrawny-config",
  "scrawny-core",
+ "scrawny-parser",
  "serde",
 ]
 
@@ -402,9 +404,19 @@ dependencies = [
  "scrawny-core",
  "scrawny-git",
  "scrawny-output",
+ "scrawny-parser",
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "scrawny-cluster"
+version = "0.1.0"
+dependencies = [
+ "scrawny-core",
+ "scrawny-parser",
+ "serde",
 ]
 
 [[package]]
@@ -438,9 +450,20 @@ name = "scrawny-output"
 version = "0.1.0"
 dependencies = [
  "scrawny-analysis",
+ "scrawny-cluster",
  "scrawny-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "scrawny-parser"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "scrawny-core",
+ "serde",
+ "syn 2.0.119",
 ]
 
 [[package]]
