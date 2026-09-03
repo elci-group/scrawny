@@ -133,6 +133,32 @@ fn diff_stdin_works_without_a_git_repository() {
 }
 
 #[test]
+fn check_stdin_honours_the_policy_at_path() {
+    // Mirrors how kaptaind's integration analysis invokes Scrawny: it has no
+    // interest in walking a git repo itself, it already has `git diff
+    // target...source` text and just wants a policy verdict against that
+    // repo's own `.scrawny.toml`.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".scrawny.toml"), "[policy]\nmax_review_load = 1\n").unwrap();
+
+    let diff_text = "diff --git a/a.rs b/a.rs\n\
+        index 1111111..2222222 100644\n\
+        --- a/a.rs\n\
+        +++ b/a.rs\n\
+        @@ -1,1 +1,1 @@\n\
+        -old\n\
+        +new\n";
+
+    let mut cmd = Command::cargo_bin("scrawny").unwrap();
+    cmd.args(["--path", dir.path().to_str().unwrap(), "--format", "json", "check", "--stdin"])
+        .write_stdin(diff_text);
+    let output = cmd.output().unwrap();
+    assert!(!output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["passed"], false);
+}
+
+#[test]
 fn errors_cleanly_outside_a_repository_without_stdin() {
     let dir = tempfile::tempdir().unwrap();
     Command::cargo_bin("scrawny")

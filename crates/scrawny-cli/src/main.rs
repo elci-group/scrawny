@@ -46,6 +46,13 @@ enum Command {
     Check {
         #[arg(long)]
         staged: bool,
+        /// Check a supplied diff (e.g. a ref-range comparison) instead of the
+        /// working repository. `--path` still selects which `.scrawny.toml`
+        /// policy applies.
+        #[arg(long)]
+        stdin: bool,
+        /// Read the diff from a file instead of stdin.
+        file: Option<PathBuf>,
     },
     /// Analyse a supplied diff instead of the working repository.
     Diff {
@@ -102,8 +109,13 @@ fn run(command: Command, path: &Path, format: Format) -> anyhow::Result<ExitCode
             print_suggest(&root, &description, &result, format)?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Check { staged } => {
-            let (root, _description, diff) = load_repo_diff(path, staged)?;
+        Command::Check { staged, stdin, file } => {
+            let (root, diff) = if stdin || file.is_some() {
+                (path.to_path_buf(), load_standalone_diff(stdin, file.as_deref())?)
+            } else {
+                let (root, _description, diff) = load_repo_diff(path, staged)?;
+                (root, diff)
+            };
             let config = Config::load(&root).map_err(anyhow::Error::from)?;
             let result = scrawny_analysis::analyse(&diff, &config);
             let passed = print_check(&result, &config, format)?;
@@ -111,9 +123,9 @@ fn run(command: Command, path: &Path, format: Format) -> anyhow::Result<ExitCode
         }
         Command::Diff { stdin, file } => {
             let diff = load_standalone_diff(stdin, file.as_deref())?;
-            let config = Config::default();
+            let config = Config::load(path).map_err(anyhow::Error::from)?;
             let result = scrawny_analysis::analyse(&diff, &config);
-            print_report(std::path::Path::new("(supplied diff)"), "supplied diff", &result, format)?;
+            print_report(path, "supplied diff", &result, format)?;
             Ok(ExitCode::SUCCESS)
         }
     }
