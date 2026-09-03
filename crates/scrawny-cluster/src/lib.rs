@@ -186,6 +186,7 @@ mod tests {
             lines_removed: 0,
             classification: Classification::new(Concern::Behavioural, 0.7),
             touched_symbols: touched.iter().map(|s| s.to_string()).collect(),
+            lines: Vec::new(),
         }
     }
 

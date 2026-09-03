@@ -186,6 +186,75 @@ fn check_stdin_honours_the_policy_at_path() {
 }
 
 #[test]
+fn split_reports_nothing_to_split_for_a_single_coherent_unit() {
+    let dir = init_repo();
+    std::fs::write(dir.path().join("lib.rs"), "fn only() {\n    old();\n}\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-q", "-m", "initial"]);
+    std::fs::write(dir.path().join("lib.rs"), "fn only() {\n    new();\n}\n").unwrap();
+
+    Command::cargo_bin("scrawny")
+        .unwrap()
+        .args(["--path", dir.path().to_str().unwrap(), "split", "--discard-worktree"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing to split"));
+}
+
+#[test]
+fn split_constructs_validated_commits_without_touching_the_current_branch() {
+    let dir = init_repo();
+    std::fs::write(
+        dir.path().join("lib.rs"),
+        "fn alpha() {\n    println!(\"a\");\n}\n\nfn beta() {\n    println!(\"b\");\n}\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-q", "-m", "initial"]);
+    std::fs::write(
+        dir.path().join("lib.rs"),
+        "fn alpha() {\n    println!(\"a changed\");\n}\n\nfn beta() {\n    println!(\"b changed\");\n}\n",
+    )
+    .unwrap();
+
+    let head_before = git_output(dir.path(), &["rev-parse", "HEAD"]);
+
+    let output = Command::cargo_bin("scrawny")
+        .unwrap()
+        .args(["--path", dir.path().to_str().unwrap(), "--format", "json", "split", "--discard-worktree"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let commits = json["commits"].as_array().unwrap();
+    assert_eq!(commits.len(), 2, "alpha and beta are unrelated, expected 2 commits: {commits:#?}");
+    let branch = json["branch"].as_str().unwrap();
+
+    // The current branch/HEAD must be completely untouched.
+    assert_eq!(git_output(dir.path(), &["rev-parse", "HEAD"]), head_before);
+    let status = git_output(dir.path(), &["status", "--porcelain"]);
+    assert!(status.contains("lib.rs"), "the original uncommitted change should still be sitting there");
+
+    // But the branch scrawny built is real and reachable from the same repo.
+    let log = git_output(dir.path(), &["log", "--oneline", branch]);
+    assert_eq!(log.lines().count(), 3, "init + 2 split commits");
+
+    // The worktree scratch directory should be gone (--discard-worktree).
+    let worktree_path = json["worktree"].as_str().unwrap();
+    assert!(!std::path::Path::new(worktree_path).exists());
+
+    // Clean up the branch this test created inside the shared tempdir repo.
+    git(dir.path(), &["branch", "-D", branch]);
+}
+
+fn git_output(dir: &Path, args: &[&str]) -> String {
+    let output = StdCommand::new("git").arg("-C").arg(dir).args(args).output().expect("git runnable");
+    assert!(output.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+#[test]
 fn errors_cleanly_outside_a_repository_without_stdin() {
     let dir = tempfile::tempdir().unwrap();
     Command::cargo_bin("scrawny")

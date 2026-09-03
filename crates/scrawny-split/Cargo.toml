@@ -1,0 +1,16 @@
+[package]
+name = "scrawny-split"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+scrawny-core.workspace = true
+scrawny-cluster.workspace = true
+scrawny-parser.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+scrawny-analysis.workspace = true
+scrawny-config.workspace = true

@@ -15,6 +15,9 @@ use std::path::Path;
 use syn::spanned::Spanned;
 use syn::visit::Visit;
 
+pub mod attribution;
+pub use attribution::{tag_hunk_lines, TaggedLine};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SymbolKind {
     Function,

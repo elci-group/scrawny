@@ -98,6 +98,12 @@ pub struct Change {
     /// treat "shares a context line with the impl block" as relatedness.
     /// Empty when no symbol data was available for this file.
     pub touched_symbols: Vec<String>,
+    /// The change's own diff lines, context included, in original order —
+    /// enough to reconstruct this change's contribution to the file on its
+    /// own (Phase III patch/commit construction). Never dropped: this is
+    /// the same content classification and clustering already looked at,
+    /// just retained instead of discarded after extraction.
+    pub lines: Vec<crate::diff::DiffLine>,
 }
 
 impl Change {

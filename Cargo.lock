@@ -400,11 +400,13 @@ dependencies = [
  "clap",
  "predicates",
  "scrawny-analysis",
+ "scrawny-cluster",
  "scrawny-config",
  "scrawny-core",
  "scrawny-git",
  "scrawny-output",
  "scrawny-parser",
+ "scrawny-split",
  "serde",
  "serde_json",
  "tempfile",
@@ -464,6 +466,18 @@ dependencies = [
  "scrawny-core",
  "serde",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "scrawny-split"
+version = "0.1.0"
+dependencies = [
+ "scrawny-analysis",
+ "scrawny-cluster",
+ "scrawny-config",
+ "scrawny-core",
+ "scrawny-parser",
+ "serde",
 ]
 
 [[package]]

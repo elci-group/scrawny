@@ -2,12 +2,15 @@ use clap::{Parser, Subcommand};
 use scrawny_analysis::{AnalysisResult, SymbolTable};
 use scrawny_config::Config;
 use scrawny_core::{Diff, FileStatus};
-use scrawny_git::{diff_from_text, DiffSpec, GitCliRepository, Repository};
+use scrawny_git::{diff_from_text, DiffSpec, GitCliRepository, Repository, SplitWorktree};
 use scrawny_output::{build_report, render, Format};
+use scrawny_split::{FileChange, PlanInputs};
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Parser)]
 #[command(name = "scrawny", version, about = "Detect and explain review-hostile changes.")]
@@ -37,10 +40,25 @@ enum Command {
         #[arg(long)]
         staged: bool,
     },
-    /// Generate a decomposition proposal (not yet available — Phase II).
+    /// Generate a decomposition proposal (ranked clusters, no mutation).
     Suggest {
         #[arg(long)]
         staged: bool,
+    },
+    /// Construct and validate a real series of commits from the detected
+    /// clusters, entirely inside a disposable temporary worktree. Never
+    /// touches the current branch or checkout; nothing is merged, reset, or
+    /// pushed. `--apply`-style automation onto the real branch is
+    /// deliberately not implemented (Phase V territory).
+    Split {
+        #[arg(long)]
+        staged: bool,
+        /// Remove the temporary worktree after presenting the plan. The
+        /// branch it built (and its commits) are kept either way — this
+        /// only controls whether the scratch working directory sticks
+        /// around for inspection.
+        #[arg(long)]
+        discard_worktree: bool,
     },
     /// CI-compatible pass/fail check against policy thresholds.
     Check {
@@ -112,6 +130,9 @@ fn run(command: Command, path: &Path, format: Format) -> anyhow::Result<ExitCode
             print_suggest(&root, &description, &result, format)?;
             Ok(ExitCode::SUCCESS)
         }
+        Command::Split { staged, discard_worktree } => {
+            cmd_split(path, staged, discard_worktree, format)
+        }
         Command::Check { staged, stdin, file } => {
             let (root, diff) = if stdin || file.is_some() {
                 (path.to_path_buf(), load_standalone_diff(stdin, file.as_deref())?)
@@ -167,6 +188,188 @@ fn build_symbol_table(root: &Path, diff: &Diff) -> SymbolTable {
         }
     }
     table
+}
+
+fn cmd_split(path: &Path, staged: bool, discard_worktree: bool, format: Format) -> anyhow::Result<ExitCode> {
+    let repo = GitCliRepository::discover(path).map_err(anyhow::Error::from)?;
+    let root = repo.root().to_path_buf();
+    let spec = if staged { DiffSpec::Staged } else { DiffSpec::HeadToWorkingTree };
+    let raw_diff = repo.diff(spec).map_err(anyhow::Error::from)?;
+    let config = Config::load(&root).map_err(anyhow::Error::from)?;
+
+    let binary_count = raw_diff.files.iter().filter(|f| f.is_binary).count();
+    let diff = Diff { files: raw_diff.files.into_iter().filter(|f| !f.is_binary).collect() };
+
+    let symbols = build_symbol_table(&root, &diff);
+    let changes = scrawny_analysis::extract::extract_changes(&diff, &config, &symbols);
+    let clusters = scrawny_cluster::cluster_changes(&changes, &symbols);
+
+    if binary_count > 0 {
+        eprintln!("note: {binary_count} binary file(s) excluded from decomposition (unaffected by this split)");
+    }
+
+    if clusters.len() <= 1 {
+        println!("Everything in this change is one connected unit — nothing to split.");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let (base_content, target_content) = read_content_for_split(&repo, &root, &diff, staged)?;
+    let inputs = PlanInputs { diff: &diff, base_content: &base_content, target_content: &target_content, symbols: &symbols };
+
+    let plan = match scrawny_split::build_plan(&inputs, &clusters, &changes) {
+        Ok(plan) => plan,
+        Err(error) => {
+            eprintln!("error: could not safely construct a decomposition for this change: {error}");
+            eprintln!("No commits were made. Your repository is unchanged.");
+            return Ok(ExitCode::FAILURE);
+        }
+    };
+
+    let branch = format!("scrawny/split-{}", short_id());
+    let worktree = SplitWorktree::create(&root, "HEAD", &branch).map_err(anyhow::Error::from)?;
+
+    let mut shas = Vec::with_capacity(plan.commits.len());
+    for commit in &plan.commits {
+        for file_change in &commit.files {
+            match file_change {
+                FileChange::Write { path, content } => worktree.write_file(path, content).map_err(anyhow::Error::from)?,
+                FileChange::Delete { path } => worktree.delete_file(path).map_err(anyhow::Error::from)?,
+            }
+        }
+        let sha = worktree.commit_all(&commit.message).map_err(anyhow::Error::from)?;
+        shas.push(sha);
+    }
+
+    let clean = worktree.is_clean().map_err(anyhow::Error::from)?;
+    if !clean {
+        eprintln!("error: worktree was not clean after committing every proposed change — refusing to present this plan");
+        worktree.remove().ok();
+        return Ok(ExitCode::FAILURE);
+    }
+
+    print_split_report(&root, &branch, worktree.path(), &plan, &shas, format)?;
+
+    if discard_worktree {
+        worktree.remove().map_err(anyhow::Error::from)?;
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Base ("before") content for every `Modified` file, and target ("after")
+/// content for every non-`Removed` file — read from the index when
+/// `staged`, otherwise from the working tree, matching whichever diff spec
+/// produced `diff` in the first place.
+fn read_content_for_split(
+    repo: &GitCliRepository,
+    root: &Path,
+    diff: &Diff,
+    staged: bool,
+) -> anyhow::Result<(HashMap<PathBuf, String>, HashMap<PathBuf, String>)> {
+    let mut base_content = HashMap::new();
+    let mut target_content = HashMap::new();
+
+    for file in &diff.files {
+        if file.status == FileStatus::Modified {
+            if let Some(content) = repo.show_file("HEAD", &file.path).map_err(anyhow::Error::from)? {
+                base_content.insert(file.path.clone(), content);
+            }
+        }
+        if file.status != FileStatus::Removed {
+            let content = if staged {
+                repo.show_file("", &file.path).map_err(anyhow::Error::from)?
+            } else {
+                std::fs::read_to_string(root.join(&file.path)).ok()
+            };
+            if let Some(content) = content {
+                target_content.insert(file.path.clone(), content);
+            }
+        }
+    }
+
+    Ok((base_content, target_content))
+}
+
+fn short_id() -> String {
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    format!("{nanos:x}")
+}
+
+fn print_split_report(
+    root: &Path,
+    branch: &str,
+    worktree_path: &Path,
+    plan: &scrawny_split::SplitPlan,
+    shas: &[String],
+    format: Format,
+) -> anyhow::Result<()> {
+    match format {
+        Format::Json | Format::Jsonl => {
+            #[derive(serde::Serialize)]
+            struct CommitReport<'a> {
+                sha: &'a str,
+                message: &'a str,
+                evidence: &'a [String],
+                lines_added: usize,
+                lines_removed: usize,
+                files: usize,
+            }
+            #[derive(serde::Serialize)]
+            struct SplitReport<'a> {
+                repository: String,
+                branch: &'a str,
+                worktree: String,
+                commits: Vec<CommitReport<'a>>,
+            }
+            let report = SplitReport {
+                repository: root.display().to_string(),
+                branch,
+                worktree: worktree_path.display().to_string(),
+                commits: plan
+                    .commits
+                    .iter()
+                    .zip(shas)
+                    .map(|(c, sha)| CommitReport {
+                        sha,
+                        message: &c.message,
+                        evidence: &c.evidence,
+                        lines_added: c.lines_added,
+                        lines_removed: c.lines_removed,
+                        files: c.files.len(),
+                    })
+                    .collect(),
+            };
+            let text = if format == Format::Json {
+                serde_json::to_string_pretty(&report)?
+            } else {
+                serde_json::to_string(&report)?
+            };
+            println!("{text}");
+        }
+        Format::Text => {
+            println!("Constructed and validated {} commit(s) on branch {branch}:", plan.commits.len());
+            println!();
+            for (commit, sha) in plan.commits.iter().zip(shas) {
+                let short_sha = &sha[..sha.len().min(10)];
+                let subject = commit.message.lines().next().unwrap_or(&commit.message);
+                println!(
+                    "  {short_sha}  {subject}  (+{} -{}, {} file(s))",
+                    commit.lines_added,
+                    commit.lines_removed,
+                    commit.files.len()
+                );
+                for reason in &commit.evidence {
+                    println!("            {reason}");
+                }
+            }
+            println!();
+            println!("Worktree: {}", worktree_path.display());
+            println!("Branch:   {branch}  (reachable from this repo — `git log {branch}`)");
+            println!();
+            println!("Your current branch and working tree are untouched. Nothing was pushed.");
+        }
+    }
+    Ok(())
 }
 
 fn load_repo_diff(path: &Path, staged: bool) -> anyhow::Result<(PathBuf, String, Diff)> {

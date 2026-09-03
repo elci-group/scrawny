@@ -83,6 +83,31 @@ impl GitCliRepository {
         &self.root
     }
 
+    /// Read a file's content at `rev` (e.g. `"HEAD"`). `Ok(None)` means the
+    /// path doesn't exist at that revision (e.g. it was added since).
+    pub fn show_file(&self, rev: &str, path: &Path) -> Result<Option<String>> {
+        let spec = format!("{rev}:{}", path.display());
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.root)
+            .args(["show", &spec])
+            .output()
+            .map_err(|source| ScrawnyError::Io { path: self.root.clone(), source })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("does not exist") || stderr.contains("exists on disk, but not in") {
+                return Ok(None);
+            }
+            return Err(ScrawnyError::GitFailure {
+                command: format!("git show {spec}"),
+                stderr: stderr.to_string(),
+            });
+        }
+
+        Ok(Some(String::from_utf8_lossy(&output.stdout).to_string()))
+    }
+
     fn run(&self, args: &[&str]) -> Result<String> {
         let output = Command::new("git")
             .arg("-C")

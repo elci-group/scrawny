@@ -2,7 +2,7 @@ use crate::classify::classify_hunk;
 use scrawny_cluster::SymbolTable;
 use scrawny_config::Config;
 use scrawny_core::{Change, ChangeId, ChangeKind, Diff, DiffLine, FileStatus, Hunk, Range};
-use scrawny_parser::Symbol;
+use scrawny_parser::{tag_hunk_lines, Symbol};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -37,6 +37,7 @@ pub fn extract_changes(diff: &Diff, config: &Config, symbols: &SymbolTable) -> V
                         lines_removed: hunk.lines_removed(),
                         classification,
                         touched_symbols: Vec::new(),
+                        lines: hunk.lines.clone(),
                     });
                 }
                 Some(groups) if groups.len() <= 1 => {
@@ -62,6 +63,7 @@ pub fn extract_changes(diff: &Diff, config: &Config, symbols: &SymbolTable) -> V
                         lines_removed: hunk.lines_removed(),
                         classification,
                         touched_symbols,
+                        lines: hunk.lines.clone(),
                     });
                 }
                 Some(groups) => {
@@ -89,6 +91,7 @@ pub fn extract_changes(diff: &Diff, config: &Config, symbols: &SymbolTable) -> V
                             lines_removed: synthetic.lines_removed(),
                             classification,
                             touched_symbols: group.key.into_iter().collect(),
+                            lines: synthetic.lines,
                         });
                     }
                 }
@@ -114,6 +117,7 @@ pub fn extract_changes(diff: &Diff, config: &Config, symbols: &SymbolTable) -> V
                 lines_removed: 0,
                 classification,
                 touched_symbols: Vec::new(),
+                lines: Vec::new(),
             });
         }
     }
@@ -123,8 +127,8 @@ pub fn extract_changes(diff: &Diff, config: &Config, symbols: &SymbolTable) -> V
 
 /// One sub-region of a hunk attributed to a single symbol (or `None` for
 /// lines outside every known symbol — comments, blank lines, `use`
-/// statements). Never drops a line: every `Added`/`Removed` line in the
-/// source hunk ends up in exactly one group.
+/// statements). Never drops a line: every line in the source hunk
+/// (context included) ends up in exactly one group, in original order.
 struct SymbolGroup {
     key: Option<String>,
     old_range: Range,
@@ -132,31 +136,26 @@ struct SymbolGroup {
     lines: Vec<DiffLine>,
 }
 
-/// Attribute each added/removed line in `hunk` to the innermost symbol whose
-/// range contains its new-file line number (a removed line is attributed to
-/// the symbol at the new-file cursor position it was removed *at* — the
-/// nearest defensible attribution without old-file symbol data). Returns one
-/// group per distinct symbol touched, in first-appearance order, plus one
-/// `None` group for anything outside every known symbol.
+/// Group `hunk`'s tagged lines (see `scrawny_parser::tag_hunk_lines`) by
+/// symbol, for extraction/clustering purposes. Order-within-group is
+/// preserved but groups themselves are *not* a substitute for the flat
+/// tagged sequence when true original order matters (see attribution.rs's
+/// module docs) — this function is only ever used here, for building
+/// `Change` records, never for reconstruction.
 fn split_by_symbol(hunk: &Hunk, symbols: &[Symbol]) -> Vec<SymbolGroup> {
     let mut builders: Vec<GroupBuilder> = Vec::new();
     let mut new_cursor = hunk.new_range.start;
     let mut old_cursor = hunk.old_range.start;
 
-    for line in &hunk.lines {
-        let key = innermost_symbol_at(new_cursor, symbols).map(|s| s.name.clone());
-
-        match line {
+    for tagged in tag_hunk_lines(hunk, symbols) {
+        let builder = find_or_insert(&mut builders, &tagged.key);
+        match &tagged.line {
             DiffLine::Added(_) => {
-                let builder = find_or_insert(&mut builders, &key);
                 builder.new_lines.push(new_cursor);
-                builder.lines.push(line.clone());
                 new_cursor += 1;
             }
             DiffLine::Removed(_) => {
-                let builder = find_or_insert(&mut builders, &key);
                 builder.old_lines.push(old_cursor);
-                builder.lines.push(line.clone());
                 old_cursor += 1;
             }
             DiffLine::Context(_) => {
@@ -164,11 +163,16 @@ fn split_by_symbol(hunk: &Hunk, symbols: &[Symbol]) -> Vec<SymbolGroup> {
                 old_cursor += 1;
             }
         }
+        builder.lines.push(tagged.line);
     }
 
     builders
         .into_iter()
-        .filter(|b| !b.lines.is_empty())
+        // A group with only context lines (no real edit) isn't a change —
+        // this happens now that context lines are retained per-group for
+        // reconstruction: a "None" bucket can pick up surrounding context
+        // even when nothing outside a symbol actually changed.
+        .filter(|b| !b.new_lines.is_empty() || !b.old_lines.is_empty())
         .map(|b| SymbolGroup {
             key: b.key,
             new_range: range_of(&b.new_lines, hunk.new_range),
@@ -207,13 +211,6 @@ fn range_of(lines: &[usize], fallback: Range) -> Range {
         (Some(&start), Some(&end)) => Range::new(start, end),
         _ => fallback,
     }
-}
-
-fn innermost_symbol_at(line_no: usize, symbols: &[Symbol]) -> Option<&Symbol> {
-    symbols
-        .iter()
-        .filter(|s| s.range.start <= line_no && line_no <= s.range.end)
-        .min_by_key(|s| s.range.end.saturating_sub(s.range.start))
 }
 
 fn change_kind(status: &FileStatus) -> ChangeKind {
