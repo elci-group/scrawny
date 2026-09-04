@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH diff 1  "diff " 
+.SH NAME
+diff \- Analyse a supplied diff instead of the working repository
+.SH SYNOPSIS
+\fBdiff\fR [\fB\-\-stdin\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILE\fR] 
+.SH DESCRIPTION
+Analyse a supplied diff instead of the working repository
+.SH OPTIONS
+.TP
+\fB\-\-stdin\fR
+Read the diff from stdin
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fIFILE\fR]
+Read the diff from a file

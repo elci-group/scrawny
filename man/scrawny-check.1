@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH check 1  "check " 
+.SH NAME
+check \- CI\-compatible pass/fail check against policy thresholds
+.SH SYNOPSIS
+\fBcheck\fR [\fB\-\-staged\fR] [\fB\-\-stdin\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILE\fR] 
+.SH DESCRIPTION
+CI\-compatible pass/fail check against policy thresholds
+.SH OPTIONS
+.TP
+\fB\-\-staged\fR
+
+.TP
+\fB\-\-stdin\fR
+Check a supplied diff (e.g. a ref\-range comparison) instead of the working repository. `\-\-path` still selects which `.scrawny.toml` policy applies
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fIFILE\fR]
+Read the diff from a file instead of stdin

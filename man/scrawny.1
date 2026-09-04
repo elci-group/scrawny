@@ -1,0 +1,46 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH scrawny 1  "scrawny 0.1.0" 
+.SH NAME
+scrawny \- Detect and explain review\-hostile changes.
+.SH SYNOPSIS
+\fBscrawny\fR [\fB\-\-format\fR] [\fB\-\-path\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
+.SH DESCRIPTION
+Detect and explain review\-hostile changes.
+.SH OPTIONS
+.TP
+\fB\-\-format\fR \fI<FORMAT>\fR [default: text]
+Output format: text, json, jsonl
+.TP
+\fB\-\-path\fR \fI<PATH>\fR [default: .]
+Repository path to analyse
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
+.TP
+scrawny\-analyse(1)
+Analyse current changes (default when no subcommand is given)
+.TP
+scrawny\-explain(1)
+Explain why a change is considered review\-hostile, with evidence
+.TP
+scrawny\-suggest(1)
+Generate a decomposition proposal (ranked clusters, no mutation)
+.TP
+scrawny\-split(1)
+Construct and validate a real series of commits from the detected clusters, entirely inside a disposable temporary worktree. Never touches the current branch or checkout; nothing is merged, reset, or pushed. `\-\-apply`\-style automation onto the real branch is deliberately not implemented (Phase V territory)
+.TP
+scrawny\-check(1)
+CI\-compatible pass/fail check against policy thresholds
+.TP
+scrawny\-diff(1)
+Analyse a supplied diff instead of the working repository
+.TP
+scrawny\-help(1)
+Print this message or the help of the given subcommand(s)
+.SH VERSION
+v0.1.0

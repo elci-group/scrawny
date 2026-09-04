@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH split 1  "split " 
+.SH NAME
+split \- Construct and validate a real series of commits from the detected clusters, entirely inside a disposable temporary worktree. Never touches the current branch or checkout; nothing is merged, reset, or pushed. `\-\-apply`\-style automation onto the real branch is deliberately not implemented (Phase V territory)
+.SH SYNOPSIS
+\fBsplit\fR [\fB\-\-staged\fR] [\fB\-\-discard\-worktree\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Construct and validate a real series of commits from the detected clusters, entirely inside a disposable temporary worktree. Never touches the current branch or checkout; nothing is merged, reset, or pushed. `\-\-apply`\-style automation onto the real branch is deliberately not implemented (Phase V territory)
+.SH OPTIONS
+.TP
+\fB\-\-staged\fR
+
+.TP
+\fB\-\-discard\-worktree\fR
+Remove the temporary worktree after presenting the plan. The branch it built (and its commits) are kept either way — this only controls whether the scratch working directory sticks around for inspection
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
