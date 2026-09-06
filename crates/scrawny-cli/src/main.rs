@@ -1,4 +1,5 @@
 mod cli;
+mod update;
 
 use clap::Parser;
 use cli::{Cli, Command};
@@ -85,6 +86,10 @@ fn run(command: Command, path: &Path, format: Format) -> anyhow::Result<ExitCode
             let symbols = build_symbol_table(path, &diff);
             let result = scrawny_analysis::analyse_with_symbols(&diff, &config, &symbols);
             print_report(path, "supplied diff", &result, format)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Update => {
+            update::run()?;
             Ok(ExitCode::SUCCESS)
         }
     }

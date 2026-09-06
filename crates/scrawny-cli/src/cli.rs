@@ -69,4 +69,6 @@ pub enum Command {
         /// Read the diff from a file.
         file: Option<PathBuf>,
     },
+    /// Clone the latest scrawny source and install it with `baby --user`.
+    Update,
 }
